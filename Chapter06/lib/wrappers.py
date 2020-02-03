@@ -25,7 +25,7 @@ class FireResetEnv(gym.Wrapper):
             self.env.reset()
         return obs
 
-'''Combine the repetition of actions during K frames by miximizing pixel values of K frames'''
+
 class MaxAndSkipEnv(gym.Wrapper):
     def __init__(self, env=None, skip=4):
         """Return only every `skip`-th frame"""
@@ -53,11 +53,11 @@ class MaxAndSkipEnv(gym.Wrapper):
         self._obs_buffer.append(obs)
         return obs
 
-'''Convert input observations from the emulator, normalize 210x160 RGB frames to 84x84 gray images.'''
+
 class ProcessFrame84(gym.ObservationWrapper):
     def __init__(self, env=None):
         super(ProcessFrame84, self).__init__(env)
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.bool)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
     def observation(self, obs):
         return ProcessFrame84.process(obs)
@@ -74,15 +74,13 @@ class ProcessFrame84(gym.ObservationWrapper):
         resized_screen = cv2.resize(img, (84, 110), interpolation=cv2.INTER_AREA)
         x_t = resized_screen[18:102, :]
         x_t = np.reshape(x_t, [84, 84, 1])
-        return x_t.astype(np.bool)
+        return x_t.astype(np.uint8)
 
 
-'''Create a stack of subsequent frames  and return as observations. Preview the environment.'''
 class ImageToPyTorch(gym.ObservationWrapper):
     def __init__(self, env):
         super(ImageToPyTorch, self).__init__(env)
         old_shape = self.observation_space.shape
-        # HWC to CHW
         self.observation_space = gym.spaces.Box(low=0.0, high=1.0, shape=(old_shape[-1], old_shape[0], old_shape[1]),
                                                 dtype=np.float32)
 
