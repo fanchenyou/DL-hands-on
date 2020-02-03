@@ -14,7 +14,7 @@ import collections
 DEFAULT_ENV_NAME = "PongNoFrameskip-v4"
 FPS = 25
 
-
+# python Chapter06/03_dqn_play.py --record="record/" --model="save/PongNoFrameskip-v4-best.dat"
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model", required=True, help="Model file to load")
