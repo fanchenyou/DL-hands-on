@@ -10,22 +10,16 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from tensorboardX import SummaryWriter
-
 from lib import common
+import matplotlib.pylab as plt
 
 SAVE_STATES_IMG = False
 SAVE_TRANSITIONS_IMG = False
 
-if SAVE_STATES_IMG or SAVE_TRANSITIONS_IMG:
-    import matplotlib as mpl
-    mpl.use("Agg")
-    import matplotlib.pylab as plt
-
 Vmax = 10
 Vmin = -10
 N_ATOMS = 51
-DELTA_Z = (Vmax - Vmin) / (N_ATOMS - 1)
-
+DELTA_Z = (Vmax - Vmin) / (N_ATOMS - 1)  # width of each atom in value range
 STATES_TO_EVALUATE = 1000
 EVAL_EVERY_FRAME = 100
 
@@ -47,10 +41,10 @@ class DistributionalDQN(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(conv_out_size, 512),
             nn.ReLU(),
-            nn.Linear(512, n_actions * N_ATOMS)
+            nn.Linear(512, n_actions * N_ATOMS)  # emit prob distribution for every action
         )
 
-        self.register_buffer("supports", torch.arange(Vmin, Vmax+DELTA_Z, DELTA_Z))
+        self.register_buffer("supports", torch.arange(Vmin, Vmax + DELTA_Z, DELTA_Z))
         self.softmax = nn.Softmax(dim=1)
 
     def _get_conv_out(self, shape):
@@ -64,6 +58,9 @@ class DistributionalDQN(nn.Module):
         fc_out = self.fc(conv_out)
         return fc_out.view(batch_size, -1, N_ATOMS)
 
+    # to calculate Q value (scala) from distribution
+    # use weighted sum of the normalized distribution and atom's values
+    # output is next_distribution, next_qvals
     def both(self, x):
         cat_out = self(x)
         probs = self.apply_softmax(cat_out)
@@ -98,9 +95,9 @@ def save_state_images(frame_idx, states, net, device="cpu", max_states=200):
         for batch_idx in range(batch_size):
             plt.clf()
             for action_idx in range(num_actions):
-                plt.subplot(num_actions, 1, action_idx+1)
+                plt.subplot(num_actions, 1, action_idx + 1)
                 plt.bar(p, action_prob[batch_idx, action_idx], width=0.5)
-            plt.savefig("states/%05d_%08d.png" % (ofs + batch_idx, frame_idx))
+            plt.savefig("states/states_%05d_%08d.png" % (ofs + batch_idx, frame_idx))
         ofs += batch_size
         if ofs >= max_states:
             break
@@ -129,6 +126,47 @@ def save_transition_images(batch_size, predicted, projected, next_distr, dones, 
         plt.savefig("%s_%02d%s.png" % (save_prefix, batch_idx, suffix))
 
 
+def distr_projection(next_distr, rewards, dones, Vmin, Vmax, n_atoms, gamma):
+    """
+    Perform distribution projection aka Catergorical Algorithm from the
+    "A Distributional Perspective on RL" paper
+    """
+    batch_size = len(rewards)
+    proj_distr = np.zeros((batch_size, n_atoms), dtype=np.float32)
+    print(rewards)
+    for atom in range(n_atoms):
+        tz_j = np.minimum(Vmax, np.maximum(Vmin, rewards + (Vmin + atom * DELTA_Z) * gamma))
+        b_j = (tz_j - Vmin) / DELTA_Z
+        l = np.floor(b_j).astype(np.int64)
+        u = np.ceil(b_j).astype(np.int64)
+        eq_mask = u == l
+        proj_distr[eq_mask, l[eq_mask]] += next_distr[eq_mask, atom]
+        ne_mask = u != l
+        proj_distr[ne_mask, l[ne_mask]] += next_distr[ne_mask, atom] * (u - b_j)[ne_mask]
+        proj_distr[ne_mask, u[ne_mask]] += next_distr[ne_mask, atom] * (b_j - l)[ne_mask]
+
+    # for final transitions, should not consider "next" distribution
+    # so it will have a 1 prob corresponding to the reward obtained, and 0 else where
+    if dones.any():
+        proj_distr[dones] = 0.0
+        tz_j = np.minimum(Vmax, np.maximum(Vmin, rewards[dones]))
+        b_j = (tz_j - Vmin) / DELTA_Z
+        l = np.floor(b_j).astype(np.int64)
+        u = np.ceil(b_j).astype(np.int64)
+        eq_mask = u == l
+        eq_dones = dones.copy()
+        eq_dones[dones] = eq_mask
+        if eq_dones.any():
+            proj_distr[eq_dones, l[eq_mask]] = 1.0
+        ne_mask = u != l
+        ne_dones = dones.copy()
+        ne_dones[dones] = ne_mask
+        if ne_dones.any():
+            proj_distr[ne_dones, l[ne_mask]] = (u - b_j)[ne_mask]
+            proj_distr[ne_dones, u[ne_mask]] = (b_j - l)[ne_mask]
+    return proj_distr
+
+
 def calc_loss(batch, net, tgt_net, gamma, device="cpu", save_prefix=None):
     states, actions, rewards, dones, next_states = common.unpack_batch(batch)
     batch_size = len(batch)
@@ -146,11 +184,12 @@ def calc_loss(batch, net, tgt_net, gamma, device="cpu", save_prefix=None):
     dones = dones.astype(np.bool)
 
     # project our distribution using Bellman update
-    proj_distr = common.distr_projection(next_best_distr, rewards, dones, Vmin, Vmax, N_ATOMS, gamma)
+    proj_distr = distr_projection(next_best_distr, rewards, dones, Vmin, Vmax, N_ATOMS, gamma)
 
     # calculate net output
     distr_v = net(states_v)
     state_action_values = distr_v[range(batch_size), actions_v.data]
+    # calculate the log-softmax of output, for next step calculating KL(P|Q) = -p*log(q)
     state_log_sm_v = F.log_softmax(state_action_values, dim=1)
     proj_distr_v = torch.tensor(proj_distr).to(device)
 
@@ -158,13 +197,17 @@ def calc_loss(batch, net, tgt_net, gamma, device="cpu", save_prefix=None):
         pred = F.softmax(state_action_values, dim=1).data.cpu().numpy()
         save_transition_images(batch_size, pred, proj_distr, next_best_distr, dones, rewards, save_prefix)
 
+    # calculate the KL-divergence between projected distr and the network's output, KL(P|Q) = -p*log(q)
     loss_v = -state_log_sm_v * proj_distr_v
     return loss_v.sum(dim=1).mean()
 
 
+'''
+python Chapter07/07_dqn_distrib.py --cuda
+'''
 if __name__ == "__main__":
     params = common.HYPERPARAMS['pong']
-#    params['epsilon_frames'] *= 2
+    #    params['epsilon_frames'] *= 2
     parser = argparse.ArgumentParser()
     parser.add_argument("--cuda", default=False, action="store_true", help="Enable cuda")
     args = parser.parse_args()
@@ -216,7 +259,7 @@ if __name__ == "__main__":
             if SAVE_TRANSITIONS_IMG:
                 interesting = any(map(lambda s: s.last_state is None or s.reward != 0.0, batch))
                 if interesting and frame_idx // 30000 > prev_save:
-                    save_prefix = "images/img_%08d" % frame_idx
+                    save_prefix = "states/trans_img_%08d" % frame_idx
                     prev_save = frame_idx // 30000
 
             loss_v = calc_loss(batch, net, tgt_net.target_model, gamma=params['gamma'],
