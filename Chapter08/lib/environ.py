@@ -32,7 +32,7 @@ class State:
 
     def reset(self, prices, offset):
         assert isinstance(prices, data.Prices)
-        assert offset >= self.bars_count-1
+        assert offset >= self.bars_count - 1
         self.have_position = False
         self.open_price = 0.0
         self._prices = prices
@@ -41,18 +41,21 @@ class State:
     @property
     def shape(self):
         # [h, l, c] * bars + position_flag + rel_profit (since open)
+        # Encode into a single vector which includes prices with optional volumes and two numbers indicating
+        # presence of a bought share and position profit.
         if self.volumes:
-            return (4 * self.bars_count + 1 + 1, )
+            return (4 * self.bars_count + 1 + 1,)
         else:
-            return (3*self.bars_count + 1 + 1, )
+            return (3 * self.bars_count + 1 + 1,)
 
     def encode(self):
         """
         Convert current state into numpy array.
+        Encode prices at current offset, which will be the observation of the agent
         """
         res = np.ndarray(shape=self.shape, dtype=np.float32)
         shift = 0
-        for bar_idx in range(-self.bars_count+1, 1):
+        for bar_idx in range(-self.bars_count + 1, 1):
             res[shift] = self._prices.high[self._offset + bar_idx]
             shift += 1
             res[shift] = self._prices.low[self._offset + bar_idx]
@@ -75,13 +78,14 @@ class State:
         Calculate real close price for the current bar
         """
         open = self._prices.open[self._offset]
-        rel_close = self._prices.close[self._offset]
+        rel_close = self._prices.close[self._offset]  # relative close
         return open * (1.0 + rel_close)
 
     def step(self, action):
         """
         Perform one step in our price, adjust offset, check for the end of prices
-        and handle position change
+        and handle position change.
+        It will return the reward in a percentage and indication of the episode ending.
         :param action:
         :return: reward, done
         """
@@ -89,11 +93,16 @@ class State:
         reward = 0.0
         done = False
         close = self._cur_close()
+
         if action == Actions.Buy and not self.have_position:
+            # If buy share, change state and pay commission.
+            # The instant order is current bar's close price.
             self.have_position = True
             self.open_price = close
             reward -= self.commission_perc
         elif action == Actions.Close and self.have_position:
+            # If we have a position and want to close it, pay commission again,
+            # change done flag, give a final reward for the whole position, and change state
             reward -= self.commission_perc
             done |= self.reset_on_close
             if self.reward_on_close:
@@ -104,7 +113,7 @@ class State:
         self._offset += 1
         prev_close = close
         close = self._cur_close()
-        done |= self._offset >= self._prices.close.shape[0]-1
+        done |= self._offset >= self._prices.close.shape[0] - 1
 
         if self.have_position and not self.reward_on_close:
             reward += 100.0 * (close - prev_close) / prev_close
@@ -112,34 +121,37 @@ class State:
         return reward, done
 
 
+# same with State, but modify the representation of the state passed to the agent
 class State1D(State):
     """
     State with shape suitable for 1D convolution
     """
+
     @property
     def shape(self):
         if self.volumes:
-            return (6, self.bars_count)
+            return 6, self.bars_count
         else:
-            return (5, self.bars_count)
+            return 5, self.bars_count
 
     def encode(self):
         res = np.zeros(shape=self.shape, dtype=np.float32)
-        ofs = self.bars_count-1
-        res[0] = self._prices.high[self._offset-ofs:self._offset+1]
-        res[1] = self._prices.low[self._offset-ofs:self._offset+1]
-        res[2] = self._prices.close[self._offset-ofs:self._offset+1]
+        ofs = self.bars_count - 1
+        res[0] = self._prices.high[self._offset - ofs:self._offset + 1]
+        res[1] = self._prices.low[self._offset - ofs:self._offset + 1]
+        res[2] = self._prices.close[self._offset - ofs:self._offset + 1]
         if self.volumes:
-            res[3] = self._prices.volume[self._offset-ofs:self._offset+1]
+            res[3] = self._prices.volume[self._offset - ofs:self._offset + 1]
             dst = 4
         else:
             dst = 3
         if self.have_position:
             res[dst] = 1.0
-            res[dst+1] = (self._cur_close() - self.open_price) / self.open_price
+            res[dst + 1] = (self._cur_close() - self.open_price) / self.open_price
         return res
 
 
+# customize stock environment
 class StocksEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
@@ -159,18 +171,20 @@ class StocksEnv(gym.Env):
         self.random_ofs_on_reset = random_ofs_on_reset
         self.seed()
 
+    # randomly select time series and starting offset of the time series
     def reset(self):
         # make selection of the instrument and it's offset. Then reset the state
         self._instrument = self.np_random.choice(list(self._prices.keys()))
         prices = self._prices[self._instrument]
         bars = self._state.bars_count
         if self.random_ofs_on_reset:
-            offset = self.np_random.choice(prices.high.shape[0]-bars*10) + bars
+            offset = self.np_random.choice(prices.high.shape[0] - bars * 10) + bars
         else:
             offset = bars
         self._state.reset(prices, offset)
         return self._state.encode()
 
+    # handle action chosen by the agent and return the next observation
     def step(self, action_idx):
         action = Actions(action_idx)
         reward, done = self._state.step(action)
