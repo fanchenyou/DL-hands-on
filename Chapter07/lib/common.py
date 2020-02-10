@@ -64,7 +64,7 @@ HYPERPARAMS = {
     },
 }
 
-
+'''Takes batch of transitions and packs into numpy arrays'''
 def unpack_batch(batch):
     states, actions, rewards, dones, last_states = [], [], [], [], []
     for exp in batch:
@@ -97,7 +97,7 @@ def calc_loss_dqn(batch, net, tgt_net, gamma, device="cpu"):
     expected_state_action_values = next_state_values.detach() * gamma + rewards_v
     return nn.MSELoss()(state_action_values, expected_state_action_values)
 
-
+'''Inform the total reward at the end of every epoisode, track mean reward, report in tensorbard, measures fps.'''
 class RewardTracker:
     def __init__(self, writer, stop_reward):
         self.writer = writer

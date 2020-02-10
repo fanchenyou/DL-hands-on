@@ -30,12 +30,15 @@ if __name__ == "__main__":
     epsilon_tracker = common.EpsilonTracker(selector, params)
     agent = ptan.agent.DQNAgent(net, selector, device=device)
 
+    # feed current observation to the agent to obtain the action
     exp_source = ptan.experience.ExperienceSourceFirstLast(env, agent, gamma=params['gamma'], steps_count=1)
+    # ask experience source to get next transition
     buffer = ptan.experience.ExperienceReplayBuffer(exp_source, buffer_size=params['replay_size'])
     optimizer = optim.Adam(net.parameters(), lr=params['learning_rate'])
 
     frame_idx = 0
 
+    '''Create reward tracker, report mean reward for every episode, increase frame counter, get from replay buffer'''
     with common.RewardTracker(writer, params['stop_reward']) as reward_tracker:
         while True:
             frame_idx += 1

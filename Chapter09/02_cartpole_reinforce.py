@@ -88,10 +88,14 @@ if __name__ == "__main__":
         if batch_episodes < EPISODES_TO_TRAIN:
             continue
 
+        # if have enough batch size of training sequence
+        # update model
         optimizer.zero_grad()
         states_v = torch.FloatTensor(batch_states)
         batch_actions_t = torch.LongTensor(batch_actions)
         batch_qvals_v = torch.FloatTensor(batch_qvals)
+
+        # print(states_v.size(), batch_actions_t.size())
 
         logits_v = net(states_v)
         log_prob_v = F.log_softmax(logits_v, dim=1)

@@ -85,12 +85,17 @@ class MCTS:
         return state_int not in self.probs
 
     def search_batch(self, count, batch_size, state_int, player, net, device="cpu"):
+        """
+        Main entry point
+        """
         for _ in range(count):
             self.search_minibatch(batch_size, state_int, player, net, device)
 
     def search_minibatch(self, count, state_int, player, net, device="cpu"):
         """
         Perform several MCTS searches.
+        1. Find leaf of the tree.
+        2. Optionally expand the leaf.
         """
         backup_queue = []
         expand_states = []
