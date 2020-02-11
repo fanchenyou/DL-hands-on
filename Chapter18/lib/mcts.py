@@ -13,6 +13,7 @@ class MCTS:
     """
     Class keeps statistics for every state encountered during the search
     """
+
     def __init__(self, c_puct=1.0):
         self.c_puct = c_puct
         # count of visits, state_int -> [N(s, a)]
@@ -74,7 +75,7 @@ class MCTS:
             if won:
                 # if somebody won the game, the value of the final state is -1 (as it is on opponent's turn)
                 value = -1.0
-            cur_player = 1-cur_player
+            cur_player = 1 - cur_player
             # check for the draw
             if value is None and len(game.possible_moves(cur_state)) == 0:
                 value = 0.0
