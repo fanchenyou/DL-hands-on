@@ -15,6 +15,7 @@ class MCTS:
     """
 
     def __init__(self, c_puct=1.0):
+        # see AlphaGo Zero paper, which determines U value
         self.c_puct = c_puct
         # count of visits, state_int -> [N(s, a)]
         self.visit_count = {}
@@ -36,7 +37,10 @@ class MCTS:
 
     def find_leaf(self, state_int, player):
         """
-        Traverse the tree until the end of game or leaf node
+        Traverse the tree until the end of game or leaf node,
+        keep track of visited states and executed actions,
+        in order to update node stats later
+
         :param state_int: root node state
         :param player: player to move
         :return: tuple of (value, leaf_state, player, states, actions)
@@ -60,10 +64,11 @@ class MCTS:
             probs = self.probs[cur_state]
             values_avg = self.value_avg[cur_state]
 
-            # choose action to take, in the root node add the Dirichlet noise to the probs
+            # choose action to take, in the root node add the Dirichlet noise to the probs for exploration
             if cur_state == state_int:
                 noises = np.random.dirichlet([0.03] * game.GAME_COLS)
                 probs = [0.75 * prob + 0.25 * noise for prob, noise in zip(probs, noises)]
+            # see AlphaGo Zero paper
             score = [value + self.c_puct * prob * total_sqrt / (1 + count)
                      for value, prob, count in zip(values_avg, probs, counts)]
             invalid_actions = set(range(game.GAME_COLS)) - set(game.possible_moves(cur_state))
@@ -106,6 +111,7 @@ class MCTS:
         for _ in range(count):
             value, leaf_state, leaf_player, states, actions = self.find_leaf(state_int, player)
             if value is not None:
+                # found a final game state
                 backup_queue.append((value, states, actions))
             else:
                 if leaf_state not in planned:
@@ -116,6 +122,7 @@ class MCTS:
                     expand_queue.append((leaf_state, states, actions))
 
         # do expansion of nodes
+        # use network to provide prior probs and values for batch of states
         if expand_queue:
             batch_v = model.state_lists_to_batch(expand_states, expand_players, device)
             logits_v, values_v = net(batch_v)
@@ -132,6 +139,8 @@ class MCTS:
                 backup_queue.append((value, states, actions))
 
         # perform backup of the searches
+        # The edge statistics are updated in a backward pass through each step
+        # See AlphaGo Zero paper, Figure 2(c).
         for value, states, actions in backup_queue:
             # leaf state is not stored in states and actions, so the value of the leaf will be the value of the opponent
             cur_value = -value
@@ -143,7 +152,8 @@ class MCTS:
 
     def get_policy_value(self, state_int, tau=1):
         """
-        Extract policy and action-values by the state
+        Extract policy(probs of actions) and action-values by the state
+        See Section 1 page 5 of AlphaGo Zero papre
         :param state_int: state of the board
         :return: (probs, values)
         """
